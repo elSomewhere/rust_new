@@ -80,26 +80,37 @@ fn vs_main(
 // Fragment shader
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Ambient lighting
-    let ambient = 0.3;
+    // Get the material index from the color's alpha channel
+    let material_index = u32(in.color.a * 255.0);
+
+    // Debug mode: Visualize normal directions with color
+    let debug_normals = false; // Set to false for normal rendering
+    if (debug_normals) {
+        // Map normal direction to RGB color for visualization
+        let normal_color = (normalize(in.normal) + vec3<f32>(1.0, 1.0, 1.0)) * 0.5;
+        return vec4<f32>(normal_color, 1.0);
+    }
+
+    // Ambient lighting - increased for better visibility
+    let ambient = 0.4;
 
     // Directional light
     let light_dir = normalize(vec3<f32>(0.5, 0.8, 0.5));
     let normal = normalize(in.normal);
+
+    // Calculate diffuse lighting - ensure we're using the correct normal
     let diffuse = max(dot(normal, light_dir), 0.0);
-
-    // Apply ambient occlusion
-    let ao = 1.0 - (1.0 - in.ao_value) * 0.6;
-
-    // Get material based on index
-    let material = materials[in.material_index];
 
     // Calculate final color
     let light_color = vec3<f32>(1.0, 0.95, 0.9);
-    let light_intensity = ambient + diffuse * 0.7;
-    let final_color = material.albedo_color.rgb * light_color * light_intensity * ao;
 
-    return vec4<f32>(final_color, material.albedo_color.a);
+    // Increase the diffuse factor for better visibility
+    let light_intensity = ambient + diffuse * 0.8;
+
+    // Use the color RGB components directly
+    let final_color = in.color.rgb * light_color * light_intensity;
+
+    return vec4<f32>(final_color, in.color.a);
 }
 "#;
 

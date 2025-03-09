@@ -85,7 +85,7 @@ impl TerrainGenerator {
 
                         // Check for caves
                         let cave_density = self.generate_cave_density(world_x as f64, world_y as f64, world_z as f64);
-                        if cave_density > 0.58 {
+                        if cave_density > 0.75 {  // Increased from 0.58 to 0.75
                             voxels[voxel_index] = voxel;
                         } else {
                             voxels[voxel_index] = VoxelData::air();
@@ -122,7 +122,8 @@ impl TerrainGenerator {
 
     fn generate_cave_density(&self, x: f64, y: f64, z: f64) -> f64 {
         // 3D noise for caves
-        self.cave_noise.get([x * 0.05, y * 0.05, z * 0.05]) + 0.3
+        // Increase the threshold to make caves less common (0.3 to 0.5)
+        self.cave_noise.get([x * 0.05, y * 0.05, z * 0.05]) + 0.5
     }
 
     fn get_surface_voxel(&self, x: i32, y: i32, z: i32) -> VoxelData {

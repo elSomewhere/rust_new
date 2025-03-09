@@ -17,7 +17,7 @@ use crate::worker::WorkerSystem;
 use crate::utils::{AABB, world_to_chunk_coords};
 
 pub const CHUNK_SIZE: i32 = 16;
-pub const VIEW_DISTANCE: i32 = 8;
+pub const VIEW_DISTANCE: i32 = 4;
 
 pub struct World {
     chunks: Arc<RwLock<ChunkManager>>,
@@ -32,6 +32,29 @@ impl World {
             chunks,
             mesh_strategy: MeshStrategy::Instanced,
         }
+    }
+
+    // New method to check face visibility that works across chunk boundaries
+    // New method to check face visibility that works across chunk boundaries
+    pub fn should_render_face(&self, world_pos: IVec3, face_dir: IVec3) -> bool {
+        let voxel = self.get_voxel(world_pos);
+
+        // First check: current voxel must be solid and not air
+        if voxel.is_air() || !voxel.is_solid() {
+            return false;
+        }
+
+        // Check adjacent voxel
+        let adj_pos = world_pos + face_dir;
+        let adj_voxel = self.get_voxel(adj_pos);
+
+        // Only render face if adjacent voxel is air or transparent
+        // AND has different material type (optional: improves optimization)
+        if adj_voxel.is_air() || adj_voxel.is_transparent() {
+            return true;
+        }
+
+        false
     }
 
     pub fn get_chunks(&self) -> Arc<RwLock<ChunkManager>> {
@@ -93,9 +116,16 @@ impl World {
     }
 
     pub fn update(&mut self, player_chunk_pos: IVec3, camera: &Camera, worker_system: &mut WorkerSystem) {
+        // Debug log player position
+        println!("Player chunk position: {:?}", player_chunk_pos);
+
         // Update chunk loading/unloading based on player position
         let mut chunks = self.chunks.write().unwrap();
         chunks.update(player_chunk_pos, VIEW_DISTANCE, worker_system);
+
+        // Debug log active chunks
+        let active_count = chunks.get_active_chunks().len();
+        println!("Active chunks: {}", active_count);
 
         // Process chunk updates and mesh regeneration
         chunks.process_updates(worker_system, self.mesh_strategy);

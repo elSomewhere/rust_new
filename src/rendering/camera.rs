@@ -89,6 +89,7 @@ impl CameraController {
         }
     }
 
+    // Full replacement for CameraController::update_camera method in camera.rs
     pub fn update_camera(&mut self, camera: &mut Camera, input: &InputState, dt: f32) {
         // Handle mouse input for rotation
         let dx = input.mouse_dx;
@@ -98,18 +99,25 @@ impl CameraController {
         camera.pitch = (camera.pitch - dy * self.sensitivity * dt)
             .clamp(-std::f32::consts::FRAC_PI_2 + 0.1, std::f32::consts::FRAC_PI_2 - 0.1);
 
-        // Calculate movement directions
+        // Calculate movement directions properly aligned with camera view
+        let view_dir = camera.get_view_direction();
+
+        // Forward direction is on the horizontal plane, derived from yaw only
         let forward = Vec3::new(
-            camera.yaw.cos(),
-            0.0,
             camera.yaw.sin(),
+            0.0,
+            camera.yaw.cos(),
         ).normalize();
 
+        // Right is perpendicular to forward on the horizontal plane
         let right = Vec3::new(
-            camera.yaw.sin(),
+            camera.yaw.cos(),
             0.0,
-            -camera.yaw.cos(),
+            -camera.yaw.sin(),
         ).normalize();
+
+        // Up is always world up
+        let up = Vec3::new(0.0, 1.0, 0.0);
 
         // Calculate movement speed
         let mut actual_speed = self.speed;
@@ -133,10 +141,10 @@ impl CameraController {
             velocity -= right;
         }
         if input.is_up_pressed {
-            velocity += Vec3::Y;
+            velocity += up;
         }
         if input.is_down_pressed {
-            velocity -= Vec3::Y;
+            velocity -= up;
         }
 
         // Normalize velocity to keep diagonal movement at same speed

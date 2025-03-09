@@ -291,6 +291,26 @@ impl MeshGenerator {
     }
 
     // Generate mesh using greedy meshing approach
+    // Replace the generate_greedy_mesh function with this version
+    // ADD this function to MeshGenerator in mesh.rs:
+    fn get_face_vertices(pos: Vec3, size: Vec3, normal: Vec3) -> [Vec3; 4] {
+        // This function creates correctly oriented face vertices based on the normal
+        let u = if normal.x.abs() > 0.0 { Vec3::new(0.0, 0.0, 1.0) }
+        else if normal.z.abs() > 0.0 { Vec3::new(1.0, 0.0, 0.0) }
+        else { Vec3::new(1.0, 0.0, 0.0) };
+
+        let v = if normal.y.abs() > 0.0 { Vec3::new(1.0, 0.0, 0.0) }
+        else { Vec3::new(0.0, 1.0, 0.0) };
+
+        let halfSize = size * 0.5;
+
+        [
+            pos - u * halfSize.x - v * halfSize.y, // Bottom left
+            pos + u * halfSize.x - v * halfSize.y, // Bottom right
+            pos + u * halfSize.x + v * halfSize.y, // Top right
+            pos - u * halfSize.x + v * halfSize.y, // Top left
+        ]
+    }
     pub fn generate_greedy_mesh(
         voxels: &[VoxelData],
         chunk_position: IVec3,
@@ -300,220 +320,246 @@ impl MeshGenerator {
 
         // For each axis direction (X, Y, Z)
         for axis in 0..3 {
-            let _u = (axis + 1) % 3;
-            let _v = (axis + 2) % 3;
+            let u = (axis + 1) % 3;
+            let v = (axis + 2) % 3;
 
-            let axis_dir = match axis {
-                0 => IVec3::new(1, 0, 0),
-                1 => IVec3::new(0, 1, 0),
-                _ => IVec3::new(0, 0, 1),
-            };
+            // For both positive and negative directions along each axis
+            for direction in 0..2 {
+                let axis_dir = match (axis, direction) {
+                    (0, 0) => IVec3::new(-1, 0, 0), // -X
+                    (0, 1) => IVec3::new(1, 0, 0),  // +X
+                    (1, 0) => IVec3::new(0, -1, 0), // -Y
+                    (1, 1) => IVec3::new(0, 1, 0),  // +Y
+                    (2, 0) => IVec3::new(0, 0, -1), // -Z
+                    (2, 1) => IVec3::new(0, 0, 1),  // +Z
+                    _ => unreachable!(),
+                };
 
-            // For each slice along the axis
-            for slice in 0..chunk_size {
-                let mut mask = vec![false; (chunk_size * chunk_size) as usize];
-                let mut materials = vec![0u8; (chunk_size * chunk_size) as usize];
 
-                // Build 2D mask for this slice
-                for v_coord in 0..chunk_size {
-                    for u_coord in 0..chunk_size {
-                        let mut pos = IVec3::ZERO;
+                // Normal vector for this face direction
+                let normal = Vec3::new(axis_dir.x as f32, axis_dir.y as f32, axis_dir.z as f32);
 
-                        match axis {
-                            0 => { pos.x = slice; pos.y = u_coord; pos.z = v_coord; }, // X axis
-                            1 => { pos.x = v_coord; pos.y = slice; pos.z = u_coord; }, // Y axis
-                            _ => { pos.x = u_coord; pos.y = v_coord; pos.z = slice; }, // Z axis
-                        }
+                // Starting slice depends on direction
+                let slice_start = if direction == 0 { 0 } else { 0 };
+                let slice_end = if direction == 0 { chunk_size - 1 } else { chunk_size };
 
-                        let index = (pos.x + pos.y * chunk_size + pos.z * chunk_size * chunk_size) as usize;
+                // For each slice along the axis
+                for slice in slice_start..slice_end {
+                    let mut mask = vec![false; (chunk_size * chunk_size) as usize];
+                    let mut materials = vec![0u8; (chunk_size * chunk_size) as usize];
 
-                        if index >= voxels.len() {
-                            continue;
-                        }
-
-                        // Check if this face should be visible
-                        let pos_adj = pos + axis_dir;
-
-                        let out_of_bounds = pos_adj.x < 0 || pos_adj.x >= chunk_size ||
-                            pos_adj.y < 0 || pos_adj.y >= chunk_size ||
-                            pos_adj.z < 0 || pos_adj.z >= chunk_size;
-
-                        // Face is visible if adjacent voxel is outside chunk or is transparent
-                        let adj_index = if out_of_bounds {
-                            usize::MAX
-                        } else {
-                            (pos_adj.x + pos_adj.y * chunk_size + pos_adj.z * chunk_size * chunk_size) as usize
-                        };
-
-                        let current_voxel = voxels[index];
-                        let adjacent_voxel = if out_of_bounds || adj_index >= voxels.len() {
-                            VoxelData::air()
-                        } else {
-                            voxels[adj_index]
-                        };
-
-                        let face_visible = !current_voxel.is_air() &&
-                            (adjacent_voxel.is_air() ||
-                                adjacent_voxel.is_transparent() ||
-                                out_of_bounds);
-
-                        mask[(v_coord * chunk_size + u_coord) as usize] = face_visible;
-                        materials[(v_coord * chunk_size + u_coord) as usize] = current_voxel.material_id;
-                    }
-                }
-
-                // Generate quads using greedy meshing
-                let mut visited = vec![false; (chunk_size * chunk_size) as usize];
-
-                for v_coord in 0..chunk_size {
-                    for u_coord in 0..chunk_size {
-                        let mask_index = (v_coord * chunk_size + u_coord) as usize;
-
-                        if !mask[mask_index] || visited[mask_index] {
-                            continue;
-                        }
-
-                        let material = materials[mask_index];
-
-                        // Find width of quad
-                        let mut width = 1;
-                        while u_coord + width < chunk_size {
-                            let w_index = (v_coord * chunk_size + (u_coord + width)) as usize;
-
-                            if !mask[w_index] || materials[w_index] != material || visited[w_index] {
-                                break;
+                    // Build 2D mask for this slice
+                    for v_coord in 0..chunk_size {
+                        for u_coord in 0..chunk_size {
+                            // Current position
+                            let mut pos = IVec3::ZERO;
+                            match axis {
+                                0 => { pos.x = if direction == 0 { slice } else { slice };
+                                    pos.y = u_coord; pos.z = v_coord; },
+                                1 => { pos.x = v_coord;
+                                    pos.y = if direction == 0 { slice } else { slice };
+                                    pos.z = u_coord; },
+                                _ => { pos.x = u_coord; pos.y = v_coord;
+                                    pos.z = if direction == 0 { slice } else { slice }; },
                             }
 
-                            width += 1;
+                            let index = (pos.x + pos.y * chunk_size + pos.z * chunk_size * chunk_size) as usize;
+                            if index >= voxels.len() {
+                                continue;
+                            }
+
+                            // Check for adjacency
+                            let pos_adj = pos + axis_dir;
+
+                            // Determine if adjacent voxel is air or solid
+                            let current_voxel = voxels[index];
+                            let adjacent_voxel = if pos_adj.x < 0 || pos_adj.x >= chunk_size ||
+                                pos_adj.y < 0 || pos_adj.y >= chunk_size ||
+                                pos_adj.z < 0 || pos_adj.z >= chunk_size {
+                                // Always assume air at chunk boundaries - this will be fixed later but ensures edges render
+                                VoxelData::air()
+                            } else {
+                                let adj_index = (pos_adj.x + pos_adj.y * chunk_size +
+                                    pos_adj.z * chunk_size * chunk_size) as usize;
+                                if adj_index >= voxels.len() {
+                                    VoxelData::air()
+                                } else {
+                                    voxels[adj_index]
+                                }
+                            };
+
+                            // A face is visible if:
+                            // 1. Current voxel is not air
+                            // 2. Adjacent voxel is air or transparent
+                            let face_visible = !current_voxel.is_air() &&
+                                (adjacent_voxel.is_air() || adjacent_voxel  .is_transparent());
+
+                            let mask_index = (v_coord * chunk_size + u_coord) as usize;
+                            mask[mask_index] = face_visible;
+                            if face_visible {
+                                materials[mask_index] = current_voxel.material_id;
+                            }
+
                         }
+                    }
 
-                        // Find height of quad
-                        let mut height = 1;
-                        let mut can_extend = true;
+                    // Generate quads using greedy meshing
+                    let mut visited = vec![false; (chunk_size * chunk_size) as usize];
 
-                        while v_coord + height < chunk_size && can_extend {
-                            for w in 0..width {
-                                let h_index = ((v_coord + height) * chunk_size + (u_coord + w)) as usize;
+                    for v_coord in 0..chunk_size {
+                        for u_coord in 0..chunk_size {
+                            let mask_index = (v_coord * chunk_size + u_coord) as usize;
 
-                                if !mask[h_index] || materials[h_index] != material || visited[h_index] {
-                                    can_extend = false;
+                            if !mask[mask_index] || visited[mask_index] {
+                                continue;
+                            }
+
+                            let material = materials[mask_index];
+
+                            // Find width of quad
+                            let mut width = 1;
+                            while u_coord + width < chunk_size {
+                                let w_index = (v_coord * chunk_size + (u_coord + width)) as usize;
+
+                                if !mask[w_index] || materials[w_index] != material || visited[w_index] {
                                     break;
+                                }
+
+                                width += 1;
+                            }
+
+                            // Find height of quad
+                            let mut height = 1;
+                            let mut can_extend = true;
+
+                            while v_coord + height < chunk_size && can_extend {
+                                for w in 0..width {
+                                    let h_index = ((v_coord + height) * chunk_size + (u_coord + w)) as usize;
+
+                                    if !mask[h_index] || materials[h_index] != material || visited[h_index] {
+                                        can_extend = false;
+                                        break;
+                                    }
+                                }
+
+                                if can_extend {
+                                    height += 1;
                                 }
                             }
 
-                            if can_extend {
-                                height += 1;
+                            // Mark these cells as visited
+                            for h in 0..height {
+                                for w in 0..width {
+                                    let visit_index = ((v_coord + h) * chunk_size + (u_coord + w)) as usize;
+                                    visited[visit_index] = true;
+                                }
                             }
-                        }
 
-                        // Mark these cells as visited
-                        for h in 0..height {
-                            for w in 0..width {
-                                let visit_index = ((v_coord + h) * chunk_size + (u_coord + w)) as usize;
-                                visited[visit_index] = true;
+                            // Generate quad vertices
+                            let mut pos = IVec3::ZERO;
+                            let mut pos2 = IVec3::ZERO;
+
+                            match axis {
+                                0 => { // X axis
+                                    if direction == 0 {
+                                        pos.x = slice;
+                                        pos2.x = slice;
+                                    } else {
+                                        pos.x = slice + 1;
+                                        pos2.x = slice + 1;
+                                    }
+                                    pos.y = u_coord;
+                                    pos.z = v_coord;
+                                    pos2.y = u_coord + width;
+                                    pos2.z = v_coord + height;
+                                },
+                                1 => { // Y axis
+                                    if direction == 0 {
+                                        pos.y = slice;
+                                        pos2.y = slice;
+                                    } else {
+                                        pos.y = slice + 1;
+                                        pos2.y = slice + 1;
+                                    }
+                                    pos.x = v_coord;
+                                    pos.z = u_coord;
+                                    pos2.x = v_coord + height;
+                                    pos2.z = u_coord + width;
+                                },
+                                _ => { // Z axis
+                                    if direction == 0 {
+                                        pos.z = slice;
+                                        pos2.z = slice;
+                                    } else {
+                                        pos.z = slice + 1;
+                                        pos2.z = slice + 1;
+                                    }
+                                    pos.x = u_coord;
+                                    pos.y = v_coord;
+                                    pos2.x = u_coord + width;
+                                    pos2.y = v_coord + height;
+                                },
                             }
-                        }
 
-                        // Generate quad vertices
-                        let mut pos = IVec3::ZERO;
-                        let mut pos2 = IVec3::ZERO;
+                            // Generate color based on material
+                            let color = match material {
+                                0 => [1.0, 1.0, 1.0, 0.0],    // Air (transparent)
+                                1 => [0.5, 0.5, 0.5, 1.0],    // Stone
+                                2 => [0.6, 0.3, 0.1, 1.0],    // Dirt
+                                3 => [0.3, 0.7, 0.2, 1.0],    // Grass
+                                4 => [0.9, 0.8, 0.6, 1.0],    // Sand
+                                5 => [0.2, 0.4, 0.8, 0.7],    // Water
+                                6 => [0.5, 0.3, 0.1, 1.0],    // Wood
+                                7 => [0.2, 0.5, 0.1, 0.9],    // Leaves
+                                8 => [0.9, 0.8, 0.1, 1.0],    // Gold ore
+                                9 => [0.6, 0.5, 0.5, 1.0],    // Iron ore
+                                10 => [0.2, 0.2, 0.2, 1.0],   // Coal
+                                _ => [1.0, 0.0, 1.0, 1.0],    // Unknown (magenta)
+                            };
 
-                        match axis {
-                            0 => { // X axis
-                                pos.x = slice;
-                                pos.y = u_coord;
-                                pos.z = v_coord;
+                            // With this more consistent approach:
+                            let vertex_order = if direction == 0 {
+                                [0, 3, 2, 1] // Consistent CCW for negative faces
+                            } else {
+                                [1, 2, 3, 0] // Consistent CCW for positive faces
+                            };
 
-                                pos2.x = slice + 1;
-                                pos2.y = u_coord + width;
-                                pos2.z = v_coord + height;
-                            },
-                            1 => { // Y axis
-                                pos.x = v_coord;
-                                pos.y = slice;
-                                pos.z = u_coord;
-
-                                pos2.x = v_coord + height;
-                                pos2.y = slice + 1;
-                                pos2.z = u_coord + width;
-                            },
-                            _ => { // Z axis
-                                pos.x = u_coord;
-                                pos.y = v_coord;
-                                pos.z = slice;
-
-                                pos2.x = u_coord + width;
-                                pos2.y = v_coord + height;
-                                pos2.z = slice + 1;
-                            },
-                        }
-
-                        // Determine face normal
-                        let normal = match axis {
-                            0 => if slice == chunk_size - 1 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(-1.0, 0.0, 0.0) },
-                            1 => if slice == chunk_size - 1 { Vec3::new(0.0, 1.0, 0.0) } else { Vec3::new(0.0, -1.0, 0.0) },
-                            _ => if slice == chunk_size - 1 { Vec3::new(0.0, 0.0, 1.0) } else { Vec3::new(0.0, 0.0, -1.0) },
-                        };
-
-                        // Generate color based on material
-                        let color = match material {
-                            0 => [1.0, 1.0, 1.0, 0.0], // Air (transparent)
-                            1 => [0.5, 0.5, 0.5, 1.0], // Stone
-                            2 => [0.6, 0.3, 0.1, 1.0], // Dirt
-                            3 => [0.3, 0.7, 0.2, 1.0], // Grass
-                            4 => [0.9, 0.8, 0.6, 1.0], // Sand
-                            5 => [0.2, 0.4, 0.8, 0.7], // Water
-                            _ => [1.0, 0.0, 1.0, 1.0], // Unknown (magenta)
-                        };
-
-                        // Create vertices for quad
-                        let mut quad_verts = [
-                            Vertex::new(
-                                Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32),
-                                normal,
-                                Vec2::new(0.0, 0.0),
-                                color,
-                            ),
-                            Vertex::new(
-                                Vec3::new(pos2.x as f32, pos.y as f32, pos.z as f32),
-                                normal,
-                                Vec2::new(1.0, 0.0),
-                                color,
-                            ),
-                            Vertex::new(
-                                Vec3::new(pos2.x as f32, pos2.y as f32, pos2.z as f32),
-                                normal,
-                                Vec2::new(1.0, 1.0),
-                                color,
-                            ),
-                            Vertex::new(
-                                Vec3::new(pos.x as f32, pos2.y as f32, pos2.z as f32),
-                                normal,
-                                Vec2::new(0.0, 1.0),
-                                color,
-                            ),
-                        ];
-
-                        // Adjust winding order based on face direction
-                        let quad_indices = if (axis == 0 && slice == 0) ||
-                            (axis == 1 && slice == 0) ||
-                            (axis == 2 && slice == 0) {
-                            [0u32, 1, 2, 0, 2, 3] // Back-facing
-                        } else {
-                            [0u32, 3, 2, 0, 2, 1] // Front-facing
-                        };
-
-                        // Offset vertices by chunk position
-                        for vert in &mut quad_verts {
-                            vert.position += Vec3::new(
+                            // Create vertices for quad (using the correct winding order)
+                            let face_corners = [
+                                Vec3::new(pos.x as f32, pos.y as f32, pos.z as f32),              // Bottom-left
+                                Vec3::new(pos2.x as f32, pos.y as f32, pos.z as f32),             // Bottom-right
+                                Vec3::new(pos2.x as f32, pos2.y as f32, pos2.z as f32),           // Top-right
+                                Vec3::new(pos.x as f32, pos2.y as f32, pos2.z as f32),            // Top-left
+                            ];
+                            // Calculate correct world position by multiplying chunk_position by chunk_size
+                            let chunk_world_pos = Vec3::new(
                                 chunk_position.x as f32 * chunk_size as f32,
                                 chunk_position.y as f32 * chunk_size as f32,
-                                chunk_position.z as f32 * chunk_size as f32,
+                                chunk_position.z as f32 * chunk_size as f32
                             );
-                        }
 
-                        // Add quad to mesh
-                        mesh.add_face(&quad_verts, &quad_indices);
+
+
+                            let mut quad_verts = [
+                                Vertex::new(face_corners[vertex_order[0]] + chunk_world_pos, normal, Vec2::new(0.0, 0.0), color),
+                                Vertex::new(face_corners[vertex_order[1]] + chunk_world_pos, normal, Vec2::new(1.0, 0.0), color),
+                                Vertex::new(face_corners[vertex_order[2]] + chunk_world_pos, normal, Vec2::new(1.0, 1.0), color),
+                                Vertex::new(face_corners[vertex_order[3]] + chunk_world_pos, normal, Vec2::new(0.0, 1.0), color),
+                            ];
+
+                            // Offset vertices by chunk position
+                            for vert in &mut quad_verts {
+                                vert.position += Vec3::new(
+                                    chunk_position.x as f32 * chunk_size as f32,
+                                    chunk_position.y as f32 * chunk_size as f32,
+                                    chunk_position.z as f32 * chunk_size as f32,
+                                );
+                            }
+
+                            // Add quad to mesh using consistent triangle indices
+                            let quad_indices = [0u32, 1, 2, 0, 2, 3];
+                            mesh.add_face(&quad_verts, &quad_indices);
+                        }
                     }
                 }
             }

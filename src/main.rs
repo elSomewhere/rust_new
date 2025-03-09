@@ -101,6 +101,7 @@ fn main() {
         last_frame_time: Instant::now(),
         fps_counter: FpsCounter::new(),
     };
+    game_state.input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::Instanced));
 
     let window_ref = window as &'static Window;
 
@@ -142,14 +143,23 @@ fn main() {
                         KeyCode::KeyD | KeyCode::ArrowRight => {
                             game_state.input_state.is_right_pressed = pressed;
                         }
+                        KeyCode::KeyC => { // Add C key for up movement
+                            game_state.input_state.is_up_pressed = pressed;
+                        }
+                        KeyCode::KeyX => { // Add X key for down movement
+                            game_state.input_state.is_down_pressed = pressed;
+                        }
                         KeyCode::Space => {
                             if pressed {
-                                game_state.input_state.action_triggered =
-                                    Some(UserAction::CreateExplosion);
+                                // Space creates explosion only on press
+                                // game_state.input_state.action_triggered = Some(UserAction::CreateExplosion);
+                                // Space also starts upward movement
+                                game_state.input_state.is_up_pressed = pressed;
                             } else {
+                                // On release, stop upward movement
                                 game_state.input_state.is_up_pressed = false;
                             }
-                        }
+                        },
                         KeyCode::ShiftLeft => {
                             game_state.input_state.is_run_pressed = pressed;
                         }

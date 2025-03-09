@@ -69,13 +69,17 @@ pub const ALL_NEIGHBORS: [IVec3; 26] = [
 ];
 
 // Convert between coordinate systems
+// In utils.rs, ensure the world_to_chunk_coords function is correct:
+// Convert between coordinate systems
 pub fn world_to_chunk_coords(world_pos: IVec3, chunk_size: i32) -> (IVec3, IVec3) {
+    // Use integer division for chunk position (flooring division for negative numbers)
     let chunk_pos = IVec3::new(
-        (world_pos.x.div_euclid(chunk_size)),
-        (world_pos.y.div_euclid(chunk_size)),
-        (world_pos.z.div_euclid(chunk_size)),
+        world_pos.x.div_euclid(chunk_size),
+        world_pos.y.div_euclid(chunk_size),
+        world_pos.z.div_euclid(chunk_size),
     );
 
+    // Get local position within chunk (always positive)
     let local_pos = IVec3::new(
         world_pos.x.rem_euclid(chunk_size),
         world_pos.y.rem_euclid(chunk_size),

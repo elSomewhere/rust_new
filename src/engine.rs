@@ -105,9 +105,9 @@ impl Engine {
         info!("Surface configured with {:?}", config);
 
         let camera = Camera::new(
-            Vec3::new(10.0, 100.0, 10.0),
+            Vec3::new(10.0, 70.0, 10.0),  // Lower starting position (just above sea level at 60)
             -45.0_f32.to_radians(),
-            -20.0_f32.to_radians(),
+            -10.0_f32.to_radians(),       // Look more horizontally to see terrain better
             config.width as f32 / config.height as f32,
         );
 
@@ -201,7 +201,7 @@ impl Engine {
             match action {
                 UserAction::ChangeStrategy(strategy) => {
                     self.current_mesh_strategy = *strategy;
-                    self.world.set_mesh_strategy(*strategy);
+                    self.world.set_mesh_strategy(self.current_mesh_strategy);
                     info!("Changed mesh strategy to {:?}", strategy);
                 }
                 UserAction::DestroyVoxel => {
