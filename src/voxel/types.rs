@@ -129,7 +129,8 @@ impl Material {
     }
 
     pub fn default_materials() -> Vec<Material> {
-        vec![
+        // Create base materials
+        let base_materials = vec![
             // 0: Air
             Material::new(
                 Vec4::new(1.0, 1.0, 1.0, 0.0),
@@ -184,7 +185,102 @@ impl Material {
                 0,
                 RenderingMode::Smooth,
             ),
-        ]
+            // 6: Wood
+            Material::new(
+                Vec4::new(0.5, 0.3, 0.1, 1.0),
+                0.0,
+                0.7,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 7: Leaves
+            Material::new(
+                Vec4::new(0.2, 0.5, 0.1, 0.9),
+                0.0,
+                0.9,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Auto,
+            ),
+            // 8: Gold Ore
+            Material::new(
+                Vec4::new(0.9, 0.8, 0.1, 1.0),
+                0.7,
+                0.4,
+                Vec3::new(0.2, 0.2, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 9: Iron Ore
+            Material::new(
+                Vec4::new(0.6, 0.5, 0.5, 1.0),
+                0.3,
+                0.7,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 10: Coal Ore
+            Material::new(
+                Vec4::new(0.2, 0.2, 0.2, 1.0),
+                0.0,
+                0.8,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 11: Bedrock
+            Material::new(
+                Vec4::new(0.3, 0.3, 0.3, 1.0),
+                0.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 12: Lava
+            Material::new(
+                Vec4::new(0.9, 0.3, 0.0, 0.9),
+                0.0,
+                0.3,
+                Vec3::new(0.8, 0.3, 0.0),
+                0,
+                RenderingMode::Smooth,
+            ),
+            // 13: Snow
+            Material::new(
+                Vec4::new(0.95, 0.95, 0.95, 1.0),
+                0.0,
+                0.95,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Blocky,
+            ),
+            // 14: Ice
+            Material::new(
+                Vec4::new(0.8, 0.9, 1.0, 0.8),
+                0.1,
+                0.1,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Smooth,
+            ),
+            // 15: Glass
+            Material::new(
+                Vec4::new(0.9, 0.9, 0.9, 0.4),
+                0.5,
+                0.1,
+                Vec3::new(0.0, 0.0, 0.0),
+                0,
+                RenderingMode::Smooth,
+            ),
+        ];
+
+        // Ensure we have exactly 16 materials
+        assert_eq!(base_materials.len(), 16, "Materials array must have exactly 16 elements");
+
+        base_materials
     }
 }
 
