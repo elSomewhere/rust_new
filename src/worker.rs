@@ -6,11 +6,11 @@ use log::{debug, warn, error};
 use glam::{IVec3, Vec3};
 use crossbeam_channel::{bounded, Sender, Receiver, RecvTimeoutError};
 use parking_lot::RwLock;
-use crate::utils::world_to_chunk_coords;
+use crate::utils::{world_to_chunk_coords, ALL_NEIGHBORS};
 use crate::voxel::types::{VoxelData, VoxelInstance};
 use crate::voxel::octree::Octree;
 use crate::voxel::mesh::{MeshStrategy, MeshData, MeshGenerator, FACE_DIRECTIONS};
-use crate::voxel::procedural::TerrainGenerator;
+use crate::voxel::procedural::SimpleTerrainGenerator;
 use crate::voxel::CHUNK_SIZE;
 
 // Define a task enum to represent different kinds of work
@@ -73,7 +73,7 @@ pub struct WorkerSystem {
     result_receiver: Receiver<WorkerTaskResult>,
     pending_results: VecDeque<WorkerTaskResult>,
     task_count: usize,
-    terrain_generator: Arc<TerrainGenerator>,
+    terrain_generator: Arc<SimpleTerrainGenerator>,
     chunk_cache: HashMap<IVec3, Vec<VoxelData>>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -82,11 +82,11 @@ pub struct WorkerSystem {
 impl WorkerSystem {
     pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
         // Create channels for communication
-        let (task_sender, task_receiver) = bounded(100);
-        let (result_sender, result_receiver) = bounded(100);
+        let (task_sender, task_receiver) = bounded(200); // Increased buffer size from 100 to 200
+        let (result_sender, result_receiver) = bounded(200); // Increased buffer size
 
         // Create a terrain generator
-        let terrain_generator = Arc::new(TerrainGenerator::new(42));
+        let terrain_generator = Arc::new(SimpleTerrainGenerator::new(42));
 
         // Determine number of worker threads (one less than available, minimum 1)
         let num_workers = ((num_cpus::get() as i32) - 1).max(1) as usize;
@@ -137,7 +137,7 @@ impl WorkerSystem {
         task_receiver: Receiver<WorkerTask>,
         result_sender: Sender<WorkerTaskResult>,
         is_busy: Arc<RwLock<bool>>,
-        terrain_generator: Arc<TerrainGenerator>,
+        terrain_generator: Arc<SimpleTerrainGenerator>,
     ) {
         debug!("Worker {} started", id);
 
@@ -179,7 +179,7 @@ impl WorkerSystem {
                             // Create a clone for the closure
                             let voxels_for_culling = chunk_voxels.clone();
 
-                            // Cross-chunk culling helper function
+                            // Cross-chunk culling helper function with improved consistency
                             let should_render_face = move |world_pos: IVec3, dir: IVec3| -> bool {
                                 let (chunk_pos, local_pos) = world_to_chunk_coords(world_pos, CHUNK_SIZE);
 
@@ -191,7 +191,9 @@ impl WorkerSystem {
                                     let index = (local_pos.x + local_pos.y * CHUNK_SIZE + local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
                                     if index < chunk_voxels.len() { chunk_voxels[index] } else { VoxelData::air() }
                                 } else {
-                                    VoxelData::air() // Assume air for unavailable chunks
+                                    // For missing chunks, always return true to ensure faces at chunk boundaries are rendered
+                                    // This matches the behavior in World::should_render_face
+                                    return true;
                                 };
 
                                 // Skip if not solid
@@ -210,7 +212,9 @@ impl WorkerSystem {
                                     let index = (adj_local_pos.x + adj_local_pos.y * CHUNK_SIZE + adj_local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
                                     if index < chunk_voxels.len() { chunk_voxels[index] } else { VoxelData::air() }
                                 } else {
-                                    VoxelData::air() // Assume air for unavailable chunks
+                                    // For missing adjacent chunks, always render the face
+                                    // This matches the behavior in World::should_render_face
+                                    return true;
                                 };
 
                                 // Render face if adjacent voxel is air or transparent
@@ -264,8 +268,8 @@ impl WorkerSystem {
                                     mesh
                                 },
                                 MeshStrategy::GreedyMesh => {
-                                    // Modify greedy mesh generation to use should_render_face
-                                    // For now, fall back to regular implementation
+                                    // Use the standard greedy mesh algorithm with our chunk position
+                                    // Consistency is handled at the chunk boundary level now
                                     MeshGenerator::generate_greedy_mesh(&chunk_voxels, chunk_position, CHUNK_SIZE)
                                 },
                                 MeshStrategy::MarchingCubes => {

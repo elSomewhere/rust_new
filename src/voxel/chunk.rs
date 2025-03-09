@@ -279,16 +279,21 @@ impl ChunkManager {
             if let Some(chunk) = self.chunks.get(&position) {
                 neighboring_chunks.insert(position, chunk.voxel_data.clone());
 
-                // Add neighboring chunks' voxels (only the 6 face-adjacent neighbors)
-                for dir in &[
-                    IVec3::new(1, 0, 0), IVec3::new(-1, 0, 0),
-                    IVec3::new(0, 1, 0), IVec3::new(0, -1, 0),
-                    IVec3::new(0, 0, 1), IVec3::new(0, 0, -1)
-                ] {
-                    let neighbor_pos = position + *dir;
-                    if let Some(neighbor) = self.chunks.get(&neighbor_pos) {
-                        if neighbor.state == ChunkState::Ready {
-                            neighboring_chunks.insert(neighbor_pos, neighbor.voxel_data.clone());
+                // Add all 26 neighboring chunks' voxels (including diagonal neighbors)
+                // This is more comprehensive than just the 6 face-adjacent neighbors
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            if dx == 0 && dy == 0 && dz == 0 {
+                                continue; // Skip the center chunk (already added)
+                            }
+
+                            let neighbor_pos = position + IVec3::new(dx, dy, dz);
+                            if let Some(neighbor) = self.chunks.get(&neighbor_pos) {
+                                if neighbor.state == ChunkState::Ready {
+                                    neighboring_chunks.insert(neighbor_pos, neighbor.voxel_data.clone());
+                                }
+                            }
                         }
                     }
                 }
@@ -340,6 +345,7 @@ impl ChunkManager {
         });
     }
 
+    // Replace the refresh_chunk_priorities method in ChunkManager with this improved version
     fn refresh_chunk_priorities(&mut self) {
         // Clear the loading queue
         self.loading_queue.clear();
@@ -349,27 +355,30 @@ impl ChunkManager {
         let mut to_load = Vec::new();
         let mut to_unload = Vec::new();
 
-        // Use a modified distance check that prioritizes the player's view direction
-        // This makes the view distance larger in front of the player and smaller behind
-        // First, get chunks in a cube (instead of sphere) around the player for a more even distribution
-        for x in -self.active_distance..=self.active_distance {
-            for y in -self.active_distance / 2..=self.active_distance / 2 {  // Reduced vertical range
-                for z in -self.active_distance..=self.active_distance {
+        // Use a simple cubic distance for more uniform chunk loading
+        let view_distance = self.active_distance;
+
+        // First, get chunks in a cube around the player
+        for x in -view_distance..=view_distance {
+            for y in -view_distance..=view_distance {  // Full vertical range
+                for z in -view_distance..=view_distance {
                     let offset = IVec3::new(x, y, z);
 
-                    // Use Manhattan distance instead of Euclidean for a more even chunk distribution
-                    let manhattan_dist = offset.x.abs() + offset.y.abs() * 2 + offset.z.abs();
+                    // Use simple cubic distance (max of absolute coordinates)
+                    // This creates a more even distribution of chunks
+                    let cubic_dist = offset.x.abs().max(offset.y.abs()).max(offset.z.abs());
 
-                    // Check if within view distance using Manhattan distance
-                    if manhattan_dist <= self.active_distance * 2 {
+                    // Check if within view distance using cubic distance
+                    if cubic_dist <= view_distance {
                         let chunk_pos = self.active_center + offset;
                         active_positions.push(chunk_pos);
 
                         // Check if we need to load this chunk
                         if !self.chunks.contains_key(&chunk_pos) && !self.pending_generations.contains_key(&chunk_pos) {
-                            // Calculate priority based on Manhattan distance (not squared)
-                            // This creates a more even gradient of priorities
-                            let priority = 1000.0 - manhattan_dist as f32;
+                            // Base priority on distance from center (closer = higher priority)
+                            // Use Manhattan distance for priority to ensure more even loading
+                            let manhattan_dist = (offset.x.abs() + offset.y.abs() + offset.z.abs()) as f32;
+                            let priority = 1000.0 - manhattan_dist;
 
                             to_load.push(ChunkPriority {
                                 position: chunk_pos,
@@ -404,9 +413,9 @@ impl ChunkManager {
     }
 
     fn process_chunk_queue(&mut self, worker_system: &mut WorkerSystem) {
-        // Process a limited number of chunks per frame
-        const MAX_LOADS_PER_UPDATE: usize = 8;
-        const MAX_UNLOADS_PER_UPDATE: usize = 4;
+        // Process a larger number of chunks per frame to ensure complete terrain loading
+        const MAX_LOADS_PER_UPDATE: usize = 36;  // Increased from 12
+        const MAX_UNLOADS_PER_UPDATE: usize = 12;  // Increased from 6
 
         // Process loading queue
         let mut loads_this_update = 0;

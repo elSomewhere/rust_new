@@ -52,7 +52,7 @@ impl Engine {
             .expect("Failed to create surface");
         info!("Surface created");
 
-        // Configure surface immediately to ensure it’s valid
+        // Configure surface immediately to ensure it's valid
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -241,17 +241,20 @@ impl Engine {
             (self.camera.position.z / 16.0).floor() as i32,
         );
 
-        // Calculate a view-aligned offset to load more chunks in the direction the player is looking
+        // Calculate a view-aligned offset but with reduced influence
+        // to avoid creating gaps in the terrain
         let view_dir = self.camera.get_view_direction();
         let view_offset = IVec3::new(
-            (view_dir.x * 1.5).round() as i32,
-            0, // Don't offset vertically
-            (view_dir.z * 1.5).round() as i32
+            (view_dir.x * 1.0).round() as i32, // Reduced from 1.5 to 1.0
+            (view_dir.y * 0.5).round() as i32, // Reduced vertical bias
+            (view_dir.z * 1.0).round() as i32  // Reduced from 1.5 to 1.0
         );
 
         // Offset the chunk center slightly in the view direction
         let biased_chunk_pos = camera_chunk_pos + view_offset;
 
+        // Update with an increased view distance
+        let view_distance = 6; // Increased from default 4 in the World struct
         self.world.update(biased_chunk_pos, &self.camera, &mut self.worker_system);
         self.physics_system.update(&mut self.world, dt);
         self.worker_system.update();

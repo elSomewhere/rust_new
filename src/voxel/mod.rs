@@ -36,7 +36,9 @@ impl World {
 
     // New method to check face visibility that works across chunk boundaries
     // New method to check face visibility that works across chunk boundaries
+    // Replace the should_render_face method in World with this improved version
     pub fn should_render_face(&self, world_pos: IVec3, face_dir: IVec3) -> bool {
+        // Get the current voxel
         let voxel = self.get_voxel(world_pos);
 
         // First check: current voxel must be solid and not air
@@ -46,10 +48,29 @@ impl World {
 
         // Check adjacent voxel
         let adj_pos = world_pos + face_dir;
+
+        // Get the chunk positions for both current and adjacent voxels
+        let (current_chunk_pos, _) = world_to_chunk_coords(world_pos, CHUNK_SIZE);
+        let (adj_chunk_pos, _) = world_to_chunk_coords(adj_pos, CHUNK_SIZE);
+
+        // Get the adjacent voxel
         let adj_voxel = self.get_voxel(adj_pos);
 
+        // If the adjacent position is in a different chunk, check if that chunk is loaded
+        if current_chunk_pos != adj_chunk_pos {
+            let chunks = self.chunks.read().unwrap();
+            if let Some(chunk) = chunks.get_chunk(adj_chunk_pos) {
+                if chunk.state != ChunkState::Ready {
+                    // If the adjacent chunk isn't fully loaded, always render the face
+                    return true;
+                }
+            } else {
+                // Adjacent chunk doesn't exist at all, always render the face
+                return true;
+            }
+        }
+
         // Only render face if adjacent voxel is air or transparent
-        // AND has different material type (optional: improves optimization)
         if adj_voxel.is_air() || adj_voxel.is_transparent() {
             return true;
         }
