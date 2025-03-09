@@ -1,8 +1,9 @@
 use std::time::Instant;
+use std::sync::Arc;
 use winit::{
     event::*,
     event_loop::EventLoop,
-    window::{Window, WindowBuilder},
+    window::{WindowBuilder, Window},
     keyboard::{KeyCode, PhysicalKey},
 };
 
@@ -81,18 +82,17 @@ fn main() {
     // Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    // Create window with static lifetime (memory leak is intentional here)
-    // This is a standard pattern for wgpu/winit that ensures the window outlives the surface
-    let window = Box::into_raw(Box::new(
+    // Create window and wrap it in an Arc for shared ownership
+    let window = Arc::new(
         WindowBuilder::new()
             .with_title("Voxel Engine")
             .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
             .build(&event_loop)
             .expect("Failed to create window")
-    ));
+    );
 
-    // Safety: window pointer is valid and will remain valid
-    let window = unsafe { &*window };
+    // Get window ID for use in the event loop
+    let window_id = window.id();
 
     // Capture the mouse
     window.set_cursor_grab(winit::window::CursorGrabMode::Confined)
@@ -100,20 +100,20 @@ fn main() {
         .expect("Failed to grab cursor");
     window.set_cursor_visible(false);
 
-    // Get window ID for use in the event loop
-    let window_id = window.id();
-
     // Create WGPU instance
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..Default::default()
     });
 
-    // Create surface - now the window reference is 'static
-    let surface = instance.create_surface(window).expect("Failed to create surface");
+    // Create surface using the window Arc
+    let surface = instance.create_surface(window.as_ref()).expect("Failed to create surface");
+
+    // Use a cloned Arc for the engine
+    let window_for_engine = Arc::clone(&window);
 
     // Initialize engine
-    let engine = pollster::block_on(Engine::new(window, surface));
+    let engine = pollster::block_on(Engine::new(window_for_engine, surface));
 
     // Create game state
     let mut game_state = GameState {
@@ -122,6 +122,9 @@ fn main() {
         last_frame_time: Instant::now(),
         fps_counter: FpsCounter::new(),
     };
+
+    // Clone window for the event loop closure
+    let window_for_events = Arc::clone(&window);
 
     // Run the event loop with the game state
     event_loop.run(move |event, elwt| {
@@ -136,7 +139,7 @@ fn main() {
                         game_state.engine.resize(*physical_size);
                     },
                     WindowEvent::ScaleFactorChanged { .. } => {
-                        game_state.engine.resize(window.inner_size());
+                        game_state.engine.resize(window_for_events.inner_size());
                     },
                     WindowEvent::KeyboardInput {
                         event: KeyEvent {
@@ -228,7 +231,7 @@ fn main() {
                 // Update FPS counter
                 let fps = game_state.fps_counter.update(dt);
                 if let Some(fps) = fps {
-                    window.set_title(&format!("Voxel Engine - FPS: {}", fps));
+                    window_for_events.set_title(&format!("Voxel Engine - FPS: {}", fps));
                 }
 
                 // Update and render
@@ -240,7 +243,7 @@ fn main() {
                 game_state.input_state.reset_actions();
 
                 // Redraw the window
-                window.request_redraw();
+                window_for_events.request_redraw();
             },
             _ => {}
         }

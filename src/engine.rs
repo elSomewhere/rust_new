@@ -51,7 +51,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub async fn new(window: &'static Window, surface: wgpu::Surface<'static>) -> Self {
+    pub async fn new(window: Arc<Window>, surface: wgpu::Surface<'static>) -> Self {
         // Capture the window ID
         let window_id = window.id();
 
