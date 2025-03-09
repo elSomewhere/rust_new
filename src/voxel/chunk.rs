@@ -254,19 +254,51 @@ impl ChunkManager {
     }
 
     pub fn process_updates(&mut self, worker_system: &mut WorkerSystem, _default_strategy: MeshStrategy) {
-        // Check for chunks that need remeshing
-        for chunk in self.chunks.values_mut() {
-            if chunk.state == ChunkState::Ready && chunk.needs_remesh {
-                // Schedule mesh regeneration
-                let position = chunk.position;
-                let strategy = chunk.active_mesh_strategy;
+        // First, collect all chunks that need remeshing and their positions
+        let mut chunks_to_remesh = Vec::new();
 
+        for (pos, chunk) in &self.chunks {
+            if chunk.state == ChunkState::Ready && chunk.needs_remesh {
+                chunks_to_remesh.push((*pos, chunk.active_mesh_strategy));
+            }
+        }
+
+        // Now process each chunk that needs remeshing
+        for (position, strategy) in chunks_to_remesh {
+            // Mark as processed to avoid remeshing again until needed
+            if let Some(chunk) = self.chunks.get_mut(&position) {
+                chunk.needs_remesh = false;
+            } else {
+                continue; // Skip if chunk no longer exists
+            }
+
+            // Gather voxel data from this chunk and its neighbors
+            let mut neighboring_chunks = HashMap::new();
+
+            // Add this chunk's voxels
+            if let Some(chunk) = self.chunks.get(&position) {
+                neighboring_chunks.insert(position, chunk.voxel_data.clone());
+
+                // Add neighboring chunks' voxels (only the 6 face-adjacent neighbors)
+                for dir in &[
+                    IVec3::new(1, 0, 0), IVec3::new(-1, 0, 0),
+                    IVec3::new(0, 1, 0), IVec3::new(0, -1, 0),
+                    IVec3::new(0, 0, 1), IVec3::new(0, 0, -1)
+                ] {
+                    let neighbor_pos = position + *dir;
+                    if let Some(neighbor) = self.chunks.get(&neighbor_pos) {
+                        if neighbor.state == ChunkState::Ready {
+                            neighboring_chunks.insert(neighbor_pos, neighbor.voxel_data.clone());
+                        }
+                    }
+                }
+
+                // Submit the mesh generation task
                 worker_system.submit_task(WorkerTask::GenerateMesh {
                     chunk_position: position,
                     strategy,
+                    neighboring_chunks,
                 });
-
-                chunk.needs_remesh = false;
             }
         }
 
@@ -317,23 +349,27 @@ impl ChunkManager {
         let mut to_load = Vec::new();
         let mut to_unload = Vec::new();
 
-        // Generate sphere of chunks around the center
+        // Use a modified distance check that prioritizes the player's view direction
+        // This makes the view distance larger in front of the player and smaller behind
+        // First, get chunks in a cube (instead of sphere) around the player for a more even distribution
         for x in -self.active_distance..=self.active_distance {
-            for y in -self.active_distance..=self.active_distance {
+            for y in -self.active_distance / 2..=self.active_distance / 2 {  // Reduced vertical range
                 for z in -self.active_distance..=self.active_distance {
                     let offset = IVec3::new(x, y, z);
-                    let dist_squared = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
 
-                    // Check if within sphere
-                    if dist_squared <= self.active_distance * self.active_distance {
+                    // Use Manhattan distance instead of Euclidean for a more even chunk distribution
+                    let manhattan_dist = offset.x.abs() + offset.y.abs() * 2 + offset.z.abs();
+
+                    // Check if within view distance using Manhattan distance
+                    if manhattan_dist <= self.active_distance * 2 {
                         let chunk_pos = self.active_center + offset;
                         active_positions.push(chunk_pos);
 
                         // Check if we need to load this chunk
                         if !self.chunks.contains_key(&chunk_pos) && !self.pending_generations.contains_key(&chunk_pos) {
-                            // Calculate priority based on distance
-                            let distance = (offset.x * offset.x + offset.y * offset.y + offset.z * offset.z) as f32;
-                            let priority = 1000.0 - distance; // Higher priority for closer chunks
+                            // Calculate priority based on Manhattan distance (not squared)
+                            // This creates a more even gradient of priorities
+                            let priority = 1000.0 - manhattan_dist as f32;
 
                             to_load.push(ChunkPriority {
                                 position: chunk_pos,
@@ -369,8 +405,8 @@ impl ChunkManager {
 
     fn process_chunk_queue(&mut self, worker_system: &mut WorkerSystem) {
         // Process a limited number of chunks per frame
-        const MAX_LOADS_PER_UPDATE: usize = 4;
-        const MAX_UNLOADS_PER_UPDATE: usize = 2;
+        const MAX_LOADS_PER_UPDATE: usize = 8;
+        const MAX_UNLOADS_PER_UPDATE: usize = 4;
 
         // Process loading queue
         let mut loads_this_update = 0;

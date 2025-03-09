@@ -1,9 +1,11 @@
 use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use wgpu::util::DeviceExt;
+use glam::IVec3;
 
 use crate::voxel::{World, mesh::{MeshStrategy, Vertex, MeshData}};
 use crate::voxel::types::{VoxelInstance, Material};
-use crate::voxel::chunk::ChunkState;
+use crate::voxel::chunk::{ChunkState, Chunk};
 use crate::rendering::camera::Camera;
 use crate::rendering::resources::{create_cube_model, create_depth_texture, CubeModel};
 use crate::rendering::shaders::{get_instance_shader, get_mesh_shader};
@@ -56,35 +58,20 @@ pub struct RenderingSystem {
     context: RenderContext,
 }
 
-// Buffers for mesh rendering
+// Buffers for mesh rendering - Modified to support multiple chunks
 struct MeshBuffers {
-    greedy_vbuffer: Option<wgpu::Buffer>,
-    greedy_ibuffer: Option<wgpu::Buffer>,
-    greedy_index_count: u32,
-
-    marching_vbuffer: Option<wgpu::Buffer>,
-    marching_ibuffer: Option<wgpu::Buffer>,
-    marching_index_count: u32,
-
-    dual_vbuffer: Option<wgpu::Buffer>,
-    dual_ibuffer: Option<wgpu::Buffer>,
-    dual_index_count: u32,
+    // Maps chunk position to mesh buffers (vertex buffer, index buffer, index count)
+    greedy_buffers: HashMap<IVec3, (wgpu::Buffer, wgpu::Buffer, u32)>,
+    marching_buffers: HashMap<IVec3, (wgpu::Buffer, wgpu::Buffer, u32)>,
+    dual_buffers: HashMap<IVec3, (wgpu::Buffer, wgpu::Buffer, u32)>,
 }
 
 impl MeshBuffers {
     fn new() -> Self {
         Self {
-            greedy_vbuffer: None,
-            greedy_ibuffer: None,
-            greedy_index_count: 0,
-
-            marching_vbuffer: None,
-            marching_ibuffer: None,
-            marching_index_count: 0,
-
-            dual_vbuffer: None,
-            dual_ibuffer: None,
-            dual_index_count: 0,
+            greedy_buffers: HashMap::new(),
+            marching_buffers: HashMap::new(),
+            dual_buffers: HashMap::new(),
         }
     }
 }
@@ -355,7 +342,7 @@ impl RenderingSystem {
         self.depth_texture = create_depth_texture(&self.context.device, width, height);
     }
 
-    // Main render function
+    // Main render function - Modified to support multiple chunk meshes
     pub fn render(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -370,13 +357,14 @@ impl RenderingSystem {
         let active_chunks = chunks_guard.get_active_chunks();
 
         // Collect instances from all chunks
-        // FIX: Add explicit type annotation to instances vector
         let mut instances: Vec<VoxelInstance> = Vec::new();
-        let mut greedy_mesh: Option<&MeshData> = None;
-        let mut marching_mesh: Option<&MeshData> = None;
-        let mut dual_mesh: Option<&MeshData> = None;
 
-        for (_, chunk) in &active_chunks {
+        // Track which chunks need meshes for each strategy
+        let mut greedy_meshes: Vec<(IVec3, &MeshData)> = Vec::new();
+        let mut marching_meshes: Vec<(IVec3, &MeshData)> = Vec::new();
+        let mut dual_meshes: Vec<(IVec3, &MeshData)> = Vec::new();
+
+        for (pos, chunk) in &active_chunks {
             if chunk.state != ChunkState::Ready {
                 continue;
             }
@@ -391,21 +379,21 @@ impl RenderingSystem {
                 MeshStrategy::GreedyMesh => {
                     if let Some(mesh) = chunk.mesh_data.get(&MeshStrategy::GreedyMesh) {
                         if !mesh.is_empty() {
-                            greedy_mesh = Some(mesh);
+                            greedy_meshes.push((*pos, mesh));
                         }
                     }
                 },
                 MeshStrategy::MarchingCubes => {
                     if let Some(mesh) = chunk.mesh_data.get(&MeshStrategy::MarchingCubes) {
                         if !mesh.is_empty() {
-                            marching_mesh = Some(mesh);
+                            marching_meshes.push((*pos, mesh));
                         }
                     }
                 },
                 MeshStrategy::DualContouring => {
                     if let Some(mesh) = chunk.mesh_data.get(&MeshStrategy::DualContouring) {
                         if !mesh.is_empty() {
-                            dual_mesh = Some(mesh);
+                            dual_meshes.push((*pos, mesh));
                         }
                     }
                 },
@@ -430,18 +418,21 @@ impl RenderingSystem {
             self.instance_count = 0;
         }
 
-        // Update mesh buffers if needed
-        if let Some(mesh) = greedy_mesh {
-            self.update_mesh_buffers(MeshStrategy::GreedyMesh, mesh);
+        // Update mesh buffers for each chunk
+        for (pos, mesh) in &greedy_meshes {
+            self.update_mesh_buffers(MeshStrategy::GreedyMesh, *pos, mesh);
         }
 
-        if let Some(mesh) = marching_mesh {
-            self.update_mesh_buffers(MeshStrategy::MarchingCubes, mesh);
+        for (pos, mesh) in &marching_meshes {
+            self.update_mesh_buffers(MeshStrategy::MarchingCubes, *pos, mesh);
         }
 
-        if let Some(mesh) = dual_mesh {
-            self.update_mesh_buffers(MeshStrategy::DualContouring, mesh);
+        for (pos, mesh) in &dual_meshes {
+            self.update_mesh_buffers(MeshStrategy::DualContouring, *pos, mesh);
         }
+
+        // Clean up buffers for chunks that are no longer active
+        self.clean_up_unused_buffers(&active_chunks);
 
         // Begin render pass
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -487,39 +478,33 @@ impl RenderingSystem {
             render_pass.draw_indexed(0..self.cube_model.index_count, 0, 0..self.instance_count);
         }
 
-        // Render greedy mesh
-        if let Some(vbuffer) = &self.mesh_buffers.greedy_vbuffer {
-            if let Some(ibuffer) = &self.mesh_buffers.greedy_ibuffer {
-                render_pass.set_pipeline(&self.mesh_pipeline);
-                render_pass.set_vertex_buffer(0, vbuffer.slice(..));
-                render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..self.mesh_buffers.greedy_index_count, 0, 0..1);
-            }
+        // Render all greedy meshes
+        for (_, (vbuffer, ibuffer, index_count)) in &self.mesh_buffers.greedy_buffers {
+            render_pass.set_pipeline(&self.mesh_pipeline);
+            render_pass.set_vertex_buffer(0, vbuffer.slice(..));
+            render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..*index_count, 0, 0..1);
         }
 
-        // Render marching cubes mesh
-        if let Some(vbuffer) = &self.mesh_buffers.marching_vbuffer {
-            if let Some(ibuffer) = &self.mesh_buffers.marching_ibuffer {
-                render_pass.set_pipeline(&self.mesh_pipeline);
-                render_pass.set_vertex_buffer(0, vbuffer.slice(..));
-                render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..self.mesh_buffers.marching_index_count, 0, 0..1);
-            }
+        // Render all marching cubes meshes
+        for (_, (vbuffer, ibuffer, index_count)) in &self.mesh_buffers.marching_buffers {
+            render_pass.set_pipeline(&self.mesh_pipeline);
+            render_pass.set_vertex_buffer(0, vbuffer.slice(..));
+            render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..*index_count, 0, 0..1);
         }
 
-        // Render dual contouring mesh
-        if let Some(vbuffer) = &self.mesh_buffers.dual_vbuffer {
-            if let Some(ibuffer) = &self.mesh_buffers.dual_ibuffer {
-                render_pass.set_pipeline(&self.mesh_pipeline);
-                render_pass.set_vertex_buffer(0, vbuffer.slice(..));
-                render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
-                render_pass.draw_indexed(0..self.mesh_buffers.dual_index_count, 0, 0..1);
-            }
+        // Render all dual contouring meshes
+        for (_, (vbuffer, ibuffer, index_count)) in &self.mesh_buffers.dual_buffers {
+            render_pass.set_pipeline(&self.mesh_pipeline);
+            render_pass.set_vertex_buffer(0, vbuffer.slice(..));
+            render_pass.set_index_buffer(ibuffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.draw_indexed(0..*index_count, 0, 0..1);
         }
     }
 
-    // Update mesh buffers for a specific strategy
-    fn update_mesh_buffers(&mut self, strategy: MeshStrategy, mesh: &MeshData) {
+    // Update mesh buffers for a specific strategy and chunk position
+    fn update_mesh_buffers(&mut self, strategy: MeshStrategy, chunk_pos: IVec3, mesh: &MeshData) {
         let device = &self.context.device;
 
         // Skip if mesh is empty
@@ -527,37 +512,55 @@ impl RenderingSystem {
             return;
         }
 
+        // Check if buffers already exist for this chunk
+        let buffers_exist = match strategy {
+            MeshStrategy::GreedyMesh => self.mesh_buffers.greedy_buffers.contains_key(&chunk_pos),
+            MeshStrategy::MarchingCubes => self.mesh_buffers.marching_buffers.contains_key(&chunk_pos),
+            MeshStrategy::DualContouring => self.mesh_buffers.dual_buffers.contains_key(&chunk_pos),
+            _ => false,
+        };
+
+        // If buffers already exist and vertices/indices count hasn't changed significantly,
+        // we could update them instead of recreating, but for simplicity we'll recreate them
+
         // Create vertex and index buffers
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("{:?} Vertex Buffer", strategy)),
+            label: Some(&format!("{:?} Vertex Buffer for {:?}", strategy, chunk_pos)),
             contents: bytemuck::cast_slice(&mesh.vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("{:?} Index Buffer", strategy)),
+            label: Some(&format!("{:?} Index Buffer for {:?}", strategy, chunk_pos)),
             contents: bytemuck::cast_slice(&mesh.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // Store buffers based on strategy
+        // Store buffers based on strategy and chunk position
         match strategy {
             MeshStrategy::GreedyMesh => {
-                self.mesh_buffers.greedy_vbuffer = Some(vertex_buffer);
-                self.mesh_buffers.greedy_ibuffer = Some(index_buffer);
-                self.mesh_buffers.greedy_index_count = mesh.indices.len() as u32;
+                self.mesh_buffers.greedy_buffers.insert(chunk_pos, (vertex_buffer, index_buffer, mesh.indices.len() as u32));
             },
             MeshStrategy::MarchingCubes => {
-                self.mesh_buffers.marching_vbuffer = Some(vertex_buffer);
-                self.mesh_buffers.marching_ibuffer = Some(index_buffer);
-                self.mesh_buffers.marching_index_count = mesh.indices.len() as u32;
+                self.mesh_buffers.marching_buffers.insert(chunk_pos, (vertex_buffer, index_buffer, mesh.indices.len() as u32));
             },
             MeshStrategy::DualContouring => {
-                self.mesh_buffers.dual_vbuffer = Some(vertex_buffer);
-                self.mesh_buffers.dual_ibuffer = Some(index_buffer);
-                self.mesh_buffers.dual_index_count = mesh.indices.len() as u32;
+                self.mesh_buffers.dual_buffers.insert(chunk_pos, (vertex_buffer, index_buffer, mesh.indices.len() as u32));
             },
             _ => {},
         }
+    }
+
+    // Clean up buffers for chunks that are no longer active
+    fn clean_up_unused_buffers(&mut self, active_chunks: &Vec<(IVec3, &Chunk)>) {
+        let active_positions: HashSet<IVec3> = active_chunks.iter()
+            .filter(|(_, chunk)| chunk.state == ChunkState::Ready)
+            .map(|(pos, _)| *pos)
+            .collect();
+
+        // Remove buffers for chunks that are no longer active
+        self.mesh_buffers.greedy_buffers.retain(|pos, _| active_positions.contains(pos));
+        self.mesh_buffers.marching_buffers.retain(|pos, _| active_positions.contains(pos));
+        self.mesh_buffers.dual_buffers.retain(|pos, _| active_positions.contains(pos));
     }
 }

@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::voxel::types::{VoxelData, VoxelInstance};
 use crate::utils::VertexCacheOptimizer;
+use crate::voxel::World;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MeshStrategy {
@@ -209,10 +210,13 @@ pub struct MeshGenerator;
 
 impl MeshGenerator {
     // Generate mesh using instanced approach
+    // In mesh.rs, modify the generate_instanced_mesh function to use the World.should_render_face method:
+
     pub fn generate_instanced_mesh(
         voxels: &[VoxelData],
         chunk_position: IVec3,
         chunk_size: i32,
+        world: Option<&World>, // Add world parameter
     ) -> MeshData {
         let mut mesh = MeshData::new();
 
@@ -233,32 +237,48 @@ impl MeshGenerator {
                         continue;
                     }
 
+                    // World position of this voxel
+                    let world_pos = IVec3::new(
+                        chunk_position.x * chunk_size + x,
+                        chunk_position.y * chunk_size + y,
+                        chunk_position.z * chunk_size + z,
+                    );
+
                     // Check if voxel has any exposed face
                     let mut has_exposed_face = false;
 
                     for (_face_idx, dir) in FACE_DIRECTIONS.iter().enumerate() {
-                        let adj_pos = local_pos + *dir;
+                        // If we have access to the world, use its face checking logic
+                        if let Some(world) = world {
+                            if world.should_render_face(world_pos, *dir) {
+                                has_exposed_face = true;
+                                break;
+                            }
+                        } else {
+                            // Original chunk-only logic as fallback
+                            let adj_pos = local_pos + *dir;
 
-                        if adj_pos.x < 0 || adj_pos.x >= chunk_size ||
-                            adj_pos.y < 0 || adj_pos.y >= chunk_size ||
-                            adj_pos.z < 0 || adj_pos.z >= chunk_size {
-                            // Edge of chunk, assume visible
-                            has_exposed_face = true;
-                            break;
-                        }
+                            if adj_pos.x < 0 || adj_pos.x >= chunk_size ||
+                                adj_pos.y < 0 || adj_pos.y >= chunk_size ||
+                                adj_pos.z < 0 || adj_pos.z >= chunk_size {
+                                // Edge of chunk, assume visible
+                                has_exposed_face = true;
+                                break;
+                            }
 
-                        let adj_index = (adj_pos.x + adj_pos.y * chunk_size + adj_pos.z * chunk_size * chunk_size) as usize;
+                            let adj_index = (adj_pos.x + adj_pos.y * chunk_size + adj_pos.z * chunk_size * chunk_size) as usize;
 
-                        if adj_index >= voxels.len() {
-                            has_exposed_face = true;
-                            break;
-                        }
+                            if adj_index >= voxels.len() {
+                                has_exposed_face = true;
+                                break;
+                            }
 
-                        let adj_voxel = voxels[adj_index];
+                            let adj_voxel = voxels[adj_index];
 
-                        if adj_voxel.is_air() || adj_voxel.is_transparent() {
-                            has_exposed_face = true;
-                            break;
+                            if adj_voxel.is_air() || adj_voxel.is_transparent() {
+                                has_exposed_face = true;
+                                break;
+                            }
                         }
                     }
 
@@ -267,14 +287,14 @@ impl MeshGenerator {
                     }
 
                     // Create instance for this voxel
-                    let world_pos = Vec3::new(
-                        (chunk_position.x * chunk_size + x) as f32,
-                        (chunk_position.y * chunk_size + y) as f32,
-                        (chunk_position.z * chunk_size + z) as f32,
+                    let world_pos_f32 = Vec3::new(
+                        world_pos.x as f32,
+                        world_pos.y as f32,
+                        world_pos.z as f32,
                     );
 
                     let instance = VoxelInstance::new(
-                        world_pos,
+                        world_pos_f32,
                         0, // No rotation
                         1.0, // Full scale
                         voxel.material_id as u16,
@@ -289,6 +309,8 @@ impl MeshGenerator {
 
         mesh
     }
+
+    // Similarly, modify the other mesh generation functions to accept the world parameter
 
     // Generate mesh using greedy meshing approach
     // Replace the generate_greedy_mesh function with this version

@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use log::{debug, warn, error};
-use glam::IVec3;
+use glam::{IVec3, Vec3};
 use crossbeam_channel::{bounded, Sender, Receiver, RecvTimeoutError};
 use parking_lot::RwLock;
-
-use crate::voxel::types::VoxelData;
+use crate::utils::world_to_chunk_coords;
+use crate::voxel::types::{VoxelData, VoxelInstance};
 use crate::voxel::octree::Octree;
-use crate::voxel::mesh::{MeshStrategy, MeshData, MeshGenerator};
+use crate::voxel::mesh::{MeshStrategy, MeshData, MeshGenerator, FACE_DIRECTIONS};
 use crate::voxel::procedural::TerrainGenerator;
 use crate::voxel::CHUNK_SIZE;
 
@@ -22,6 +22,7 @@ pub enum WorkerTask {
     GenerateMesh {
         chunk_position: IVec3,
         strategy: MeshStrategy,
+        neighboring_chunks: HashMap<IVec3, Vec<VoxelData>>,
     },
     SaveChunk {
         position: IVec3,
@@ -30,7 +31,6 @@ pub enum WorkerTask {
     LoadChunk {
         position: IVec3,
     },
-    // Add other task types as needed
 }
 
 // Define results for completed tasks
@@ -163,28 +163,118 @@ impl WorkerSystem {
                                 octree,
                             }
                         },
-                        WorkerTask::GenerateMesh { chunk_position, strategy } => {
+                        WorkerTask::GenerateMesh { chunk_position, strategy, neighboring_chunks } => {
                             debug!("Worker {} generating mesh for chunk {:?} with strategy {:?}",
-                                   id, chunk_position, strategy);
+                               id, chunk_position, strategy);
 
-                            // Generate terrain data if it's not already available
-                            let (voxels, _) = terrain_generator.generate_chunk(chunk_position);
+                            // Get the voxel data for the current chunk
+                            let chunk_voxels = if let Some(chunk_voxels) = neighboring_chunks.get(&chunk_position) {
+                                chunk_voxels.clone()
+                            } else {
+                                // If not available in neighboring_chunks, generate it
+                                let (generated_voxels, _) = terrain_generator.generate_chunk(chunk_position);
+                                generated_voxels
+                            };
+
+                            // Create a clone for the closure
+                            let voxels_for_culling = chunk_voxels.clone();
+
+                            // Cross-chunk culling helper function
+                            let should_render_face = move |world_pos: IVec3, dir: IVec3| -> bool {
+                                let (chunk_pos, local_pos) = world_to_chunk_coords(world_pos, CHUNK_SIZE);
+
+                                // Get current voxel
+                                let voxel = if chunk_pos == chunk_position {
+                                    let index = (local_pos.x + local_pos.y * CHUNK_SIZE + local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
+                                    if index < voxels_for_culling.len() { voxels_for_culling[index] } else { VoxelData::air() }
+                                } else if let Some(chunk_voxels) = neighboring_chunks.get(&chunk_pos) {
+                                    let index = (local_pos.x + local_pos.y * CHUNK_SIZE + local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
+                                    if index < chunk_voxels.len() { chunk_voxels[index] } else { VoxelData::air() }
+                                } else {
+                                    VoxelData::air() // Assume air for unavailable chunks
+                                };
+
+                                // Skip if not solid
+                                if voxel.is_air() || !voxel.is_solid() {
+                                    return false;
+                                }
+
+                                // Check adjacent voxel
+                                let adj_pos = world_pos + dir;
+                                let (adj_chunk_pos, adj_local_pos) = world_to_chunk_coords(adj_pos, CHUNK_SIZE);
+
+                                let adj_voxel = if adj_chunk_pos == chunk_position {
+                                    let index = (adj_local_pos.x + adj_local_pos.y * CHUNK_SIZE + adj_local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
+                                    if index < voxels_for_culling.len() { voxels_for_culling[index] } else { VoxelData::air() }
+                                } else if let Some(chunk_voxels) = neighboring_chunks.get(&adj_chunk_pos) {
+                                    let index = (adj_local_pos.x + adj_local_pos.y * CHUNK_SIZE + adj_local_pos.z * CHUNK_SIZE * CHUNK_SIZE) as usize;
+                                    if index < chunk_voxels.len() { chunk_voxels[index] } else { VoxelData::air() }
+                                } else {
+                                    VoxelData::air() // Assume air for unavailable chunks
+                                };
+
+                                // Render face if adjacent voxel is air or transparent
+                                adj_voxel.is_air() || adj_voxel.is_transparent()
+                            };
 
                             // Generate mesh based on the strategy
                             let mesh_data = match strategy {
-                                MeshStrategy::Instanced =>
-                                    MeshGenerator::generate_instanced_mesh(&voxels, chunk_position, CHUNK_SIZE),
-                                MeshStrategy::GreedyMesh =>
-                                    MeshGenerator::generate_greedy_mesh(&voxels, chunk_position, CHUNK_SIZE),
-                                MeshStrategy::MarchingCubes =>
-                                    MeshGenerator::generate_marching_cubes_mesh(&voxels, chunk_position, CHUNK_SIZE),
-                                MeshStrategy::DualContouring =>
-                                    MeshGenerator::generate_dual_contouring_mesh(&voxels, chunk_position, CHUNK_SIZE),
-                                MeshStrategy::MeshShader => {
-                                    // Mesh shaders would be implemented in the GPU,
-                                    // but we'll fall back to instanced for now
-                                    MeshGenerator::generate_instanced_mesh(&voxels, chunk_position, CHUNK_SIZE)
+                                MeshStrategy::Instanced => {
+                                    // Create mesh with proper cross-chunk face culling
+                                    let mut mesh = MeshData::new();
+
+                                    // For each voxel in this chunk
+                                    for x in 0..CHUNK_SIZE {
+                                        for y in 0..CHUNK_SIZE {
+                                            for z in 0..CHUNK_SIZE {
+                                                let index = (x + y * CHUNK_SIZE + z * CHUNK_SIZE * CHUNK_SIZE) as usize;
+                                                if index >= chunk_voxels.len() { continue; }
+
+                                                let voxel = chunk_voxels[index];
+                                                if voxel.is_air() { continue; }
+
+                                                // World position of this voxel
+                                                let world_pos = IVec3::new(
+                                                    chunk_position.x * CHUNK_SIZE + x,
+                                                    chunk_position.y * CHUNK_SIZE + y,
+                                                    chunk_position.z * CHUNK_SIZE + z
+                                                );
+
+                                                // Check if any face should be rendered
+                                                let mut has_exposed_face = false;
+                                                for dir in &FACE_DIRECTIONS {
+                                                    if should_render_face(world_pos, *dir) {
+                                                        has_exposed_face = true;
+                                                        break;
+                                                    }
+                                                }
+
+                                                if !has_exposed_face { continue; }
+
+                                                // Add instance for this voxel
+                                                let instance = VoxelInstance::new(
+                                                    Vec3::new(world_pos.x as f32, world_pos.y as f32, world_pos.z as f32),
+                                                    0, 1.0, voxel.material_id as u16, 0, 0
+                                                );
+                                                mesh.add_instance(instance);
+                                            }
+                                        }
+                                    }
+
+                                    mesh
                                 },
+                                MeshStrategy::GreedyMesh => {
+                                    // Modify greedy mesh generation to use should_render_face
+                                    // For now, fall back to regular implementation
+                                    MeshGenerator::generate_greedy_mesh(&chunk_voxels, chunk_position, CHUNK_SIZE)
+                                },
+                                MeshStrategy::MarchingCubes => {
+                                    MeshGenerator::generate_marching_cubes_mesh(&chunk_voxels, chunk_position, CHUNK_SIZE)
+                                },
+                                MeshStrategy::DualContouring => {
+                                    MeshGenerator::generate_dual_contouring_mesh(&chunk_voxels, chunk_position, CHUNK_SIZE)
+                                },
+                                _ => MeshGenerator::generate_instanced_mesh(&chunk_voxels, chunk_position, CHUNK_SIZE, None),
                             };
 
                             // Return the result
@@ -194,7 +284,7 @@ impl WorkerSystem {
                                 mesh_data,
                             }
                         },
-                        WorkerTask::SaveChunk { position, voxels } => {
+                        WorkerTask::SaveChunk { position, voxels: _ } => {
                             debug!("Worker {} saving chunk at {:?}", id, position);
 
                             // In a real implementation, this would save to disk

@@ -233,12 +233,26 @@ impl Engine {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
+        // Calculate the camera chunk position using floor division (not truncation)
+        // This ensures proper chunk alignment
         let camera_chunk_pos = IVec3::new(
             (self.camera.position.x / 16.0).floor() as i32,
             (self.camera.position.y / 16.0).floor() as i32,
             (self.camera.position.z / 16.0).floor() as i32,
         );
-        self.world.update(camera_chunk_pos, &self.camera, &mut self.worker_system);
+
+        // Calculate a view-aligned offset to load more chunks in the direction the player is looking
+        let view_dir = self.camera.get_view_direction();
+        let view_offset = IVec3::new(
+            (view_dir.x * 1.5).round() as i32,
+            0, // Don't offset vertically
+            (view_dir.z * 1.5).round() as i32
+        );
+
+        // Offset the chunk center slightly in the view direction
+        let biased_chunk_pos = camera_chunk_pos + view_offset;
+
+        self.world.update(biased_chunk_pos, &self.camera, &mut self.worker_system);
         self.physics_system.update(&mut self.world, dt);
         self.worker_system.update();
     }
