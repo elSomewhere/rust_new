@@ -548,13 +548,13 @@ impl MeshGenerator {
                             ];
 
                             // Offset vertices by chunk position
-                            for vert in &mut quad_verts {
-                                vert.position += Vec3::new(
-                                    chunk_position.x as f32 * chunk_size as f32,
-                                    chunk_position.y as f32 * chunk_size as f32,
-                                    chunk_position.z as f32 * chunk_size as f32,
-                                );
-                            }
+                            // for vert in &mut quad_verts {
+                            //     vert.position += Vec3::new(
+                            //         chunk_position.x as f32 * chunk_size as f32,
+                            //         chunk_position.y as f32 * chunk_size as f32,
+                            //         chunk_position.z as f32 * chunk_size as f32,
+                            //     );
+                            // }
 
                             // Add quad to mesh using consistent triangle indices
                             let quad_indices = [0u32, 1, 2, 0, 2, 3];
