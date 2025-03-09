@@ -96,39 +96,33 @@ impl VoxelInstance {
             array_stride: std::mem::size_of::<VoxelInstance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                // position: vec3
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 5,
                     format: wgpu::VertexFormat::Float32x3,
                 },
-                // rotation: u8 (packed)
                 wgpu::VertexAttribute {
-                    offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    offset: 12,
                     shader_location: 6,
                     format: wgpu::VertexFormat::Uint8,
                 },
-                // scale: f32
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() + std::mem::size_of::<u8>()) as wgpu::BufferAddress,
+                    offset: 16,
                     shader_location: 7,
                     format: wgpu::VertexFormat::Float32,
                 },
-                // material_index: u16
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() + std::mem::size_of::<u8>() + std::mem::size_of::<f32>()) as wgpu::BufferAddress,
+                    offset: 20,
                     shader_location: 8,
                     format: wgpu::VertexFormat::Uint16,
                 },
-                // ao_data: u8 (packed)
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() + std::mem::size_of::<u8>() + std::mem::size_of::<f32>() + std::mem::size_of::<u16>()) as wgpu::BufferAddress,
+                    offset: 22,
                     shader_location: 9,
                     format: wgpu::VertexFormat::Uint8,
                 },
-                // custom_data: u16
                 wgpu::VertexAttribute {
-                    offset: (std::mem::size_of::<[f32; 3]>() + std::mem::size_of::<u8>() + std::mem::size_of::<f32>() + std::mem::size_of::<u16>() + std::mem::size_of::<u8>()) as wgpu::BufferAddress,
+                    offset: 24,
                     shader_location: 10,
                     format: wgpu::VertexFormat::Uint16,
                 },
