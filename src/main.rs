@@ -1,12 +1,10 @@
-use std::time::{Duration, Instant};
-use log::info;
+use std::time::Instant;
 use winit::{
     event::*,
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::EventLoop,
     window::{Window, WindowBuilder},
     keyboard::{KeyCode, PhysicalKey},
 };
-use wgpu;
 
 mod engine;
 mod voxel;
@@ -70,69 +68,75 @@ impl InputState {
     }
 }
 
+struct GameState {
+    engine: Engine,
+    input_state: InputState,
+    last_frame_time: Instant,
+    fps_counter: FpsCounter,
+}
+
 fn main() {
     env_logger::init();
+
+    // Create event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
 
-    // Create window - but we'll move it into the event loop's closure below
-    let window = WindowBuilder::new()
-        .with_title("Voxel Engine")
-        .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
-        .build(&event_loop)
-        .expect("Failed to create window");
+    // Create window with static lifetime (memory leak is intentional here)
+    // This is a standard pattern for wgpu/winit that ensures the window outlives the surface
+    let window = Box::into_raw(Box::new(
+        WindowBuilder::new()
+            .with_title("Voxel Engine")
+            .with_inner_size(winit::dpi::PhysicalSize::new(1280, 720))
+            .build(&event_loop)
+            .expect("Failed to create window")
+    ));
 
-    // Run the event loop - move the window into the closure
+    // Safety: window pointer is valid and will remain valid
+    let window = unsafe { &*window };
+
+    // Capture the mouse
+    window.set_cursor_grab(winit::window::CursorGrabMode::Confined)
+        .or_else(|_| window.set_cursor_grab(winit::window::CursorGrabMode::Locked))
+        .expect("Failed to grab cursor");
+    window.set_cursor_visible(false);
+
+    // Get window ID for use in the event loop
+    let window_id = window.id();
+
+    // Create WGPU instance
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    // Create surface - now the window reference is 'static
+    let surface = instance.create_surface(window).expect("Failed to create surface");
+
+    // Initialize engine
+    let engine = pollster::block_on(Engine::new(window, surface));
+
+    // Create game state
+    let mut game_state = GameState {
+        engine,
+        input_state: InputState::default(),
+        last_frame_time: Instant::now(),
+        fps_counter: FpsCounter::new(),
+    };
+
+    // Run the event loop with the game state
     event_loop.run(move |event, elwt| {
-        // Initialize the window setup once
-        static mut ENGINE: Option<Engine> = None;
-        static mut INPUT_STATE: Option<InputState> = None;
-        static mut LAST_FRAME_TIME: Option<Instant> = None;
-        static mut FPS_COUNTER: Option<FpsCounter> = None;
-
-        // One-time setup when the event loop starts
-        if unsafe { ENGINE.is_none() } {
-            // Grab the cursor
-            window.set_cursor_grab(winit::window::CursorGrabMode::Confined)
-                .or_else(|_| window.set_cursor_grab(winit::window::CursorGrabMode::Locked))
-                .expect("Failed to grab cursor");
-            window.set_cursor_visible(false);
-
-            // Create WGPU instance
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
-                ..Default::default()
-            });
-
-            // Create surface
-            let surface = instance.create_surface(&window).expect("Failed to create surface");
-
-            // Initialize engine
-            unsafe {
-                ENGINE = Some(pollster::block_on(Engine::new(&window, surface)));
-                INPUT_STATE = Some(InputState::default());
-                LAST_FRAME_TIME = Some(Instant::now());
-                FPS_COUNTER = Some(FpsCounter::new());
-            }
-        }
-
-        // Get references to our static variables
-        let engine = unsafe { ENGINE.as_mut().unwrap() };
-        let input_state = unsafe { INPUT_STATE.as_mut().unwrap() };
-        let last_frame_time = unsafe { LAST_FRAME_TIME.as_mut().unwrap() };
-        let fps_counter = unsafe { FPS_COUNTER.as_mut().unwrap() };
-
         match event {
-            Event::WindowEvent { ref event, window_id }
-            if window_id == engine.window_id() => {
+            Event::WindowEvent { ref event, window_id: event_window_id }
+            if event_window_id == window_id => {
                 match event {
                     WindowEvent::CloseRequested => {
                         elwt.exit();
                     },
                     WindowEvent::Resized(physical_size) => {
-                        engine.resize(*physical_size);
+                        game_state.engine.resize(*physical_size);
                     },
                     WindowEvent::ScaleFactorChanged { .. } => {
-                        engine.resize(window.inner_size());
+                        game_state.engine.resize(window.inner_size());
                     },
                     WindowEvent::KeyboardInput {
                         event: KeyEvent {
@@ -145,48 +149,48 @@ fn main() {
                         let pressed = state == &ElementState::Pressed;
                         match keycode {
                             KeyCode::KeyW | KeyCode::ArrowUp => {
-                                input_state.is_forward_pressed = pressed;
+                                game_state.input_state.is_forward_pressed = pressed;
                             },
                             KeyCode::KeyS | KeyCode::ArrowDown => {
-                                input_state.is_backward_pressed = pressed;
+                                game_state.input_state.is_backward_pressed = pressed;
                             },
                             KeyCode::KeyA | KeyCode::ArrowLeft => {
-                                input_state.is_left_pressed = pressed;
+                                game_state.input_state.is_left_pressed = pressed;
                             },
                             KeyCode::KeyD | KeyCode::ArrowRight => {
-                                input_state.is_right_pressed = pressed;
+                                game_state.input_state.is_right_pressed = pressed;
                             },
                             KeyCode::Space => {
                                 if pressed {
-                                    input_state.action_triggered = Some(UserAction::CreateExplosion);
+                                    game_state.input_state.action_triggered = Some(UserAction::CreateExplosion);
                                 } else {
-                                    input_state.is_up_pressed = false;
+                                    game_state.input_state.is_up_pressed = false;
                                 }
                             },
                             KeyCode::ShiftLeft => {
-                                input_state.is_run_pressed = pressed;
+                                game_state.input_state.is_run_pressed = pressed;
                             },
                             KeyCode::ControlLeft => {
-                                input_state.is_down_pressed = pressed;
+                                game_state.input_state.is_down_pressed = pressed;
                             },
                             KeyCode::Digit1 => {
                                 if pressed {
-                                    input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::Instanced));
+                                    game_state.input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::Instanced));
                                 }
                             },
                             KeyCode::Digit2 => {
                                 if pressed {
-                                    input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::GreedyMesh));
+                                    game_state.input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::GreedyMesh));
                                 }
                             },
                             KeyCode::Digit3 => {
                                 if pressed {
-                                    input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::MarchingCubes));
+                                    game_state.input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::MarchingCubes));
                                 }
                             },
                             KeyCode::Digit4 => {
                                 if pressed {
-                                    input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::DualContouring));
+                                    game_state.input_state.action_triggered = Some(UserAction::ChangeStrategy(MeshStrategy::DualContouring));
                                 }
                             },
                             KeyCode::Escape => {
@@ -201,7 +205,7 @@ fn main() {
                         ..
                     } => {
                         if *state == ElementState::Pressed {
-                            input_state.action_triggered = Some(UserAction::DestroyVoxel);
+                            game_state.input_state.action_triggered = Some(UserAction::DestroyVoxel);
                         }
                     },
                     _ => {},
@@ -211,29 +215,29 @@ fn main() {
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion{ delta, .. }, ..
             } => {
-                input_state.mouse_dx += delta.0 as f32;
-                input_state.mouse_dy += delta.1 as f32;
+                game_state.input_state.mouse_dx += delta.0 as f32;
+                game_state.input_state.mouse_dy += delta.1 as f32;
             },
 
             Event::AboutToWait => {
                 // Update timing
                 let now = Instant::now();
-                let dt = now.duration_since(*last_frame_time).as_secs_f32();
-                *last_frame_time = now;
+                let dt = now.duration_since(game_state.last_frame_time).as_secs_f32();
+                game_state.last_frame_time = now;
 
                 // Update FPS counter
-                let fps = fps_counter.update(dt);
+                let fps = game_state.fps_counter.update(dt);
                 if let Some(fps) = fps {
                     window.set_title(&format!("Voxel Engine - FPS: {}", fps));
                 }
 
                 // Update and render
-                engine.update(dt, &input_state);
-                engine.render();
+                game_state.engine.update(dt, &game_state.input_state);
+                game_state.engine.render();
 
                 // Reset input state for next frame
-                input_state.reset_mouse_delta();
-                input_state.reset_actions();
+                game_state.input_state.reset_mouse_delta();
+                game_state.input_state.reset_actions();
 
                 // Redraw the window
                 window.request_redraw();

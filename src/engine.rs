@@ -51,7 +51,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub async fn new(window: &Window, surface: wgpu::Surface<'static>) -> Self {
+    pub async fn new(window: &'static Window, surface: wgpu::Surface<'static>) -> Self {
         // Capture the window ID
         let window_id = window.id();
 
@@ -200,19 +200,9 @@ impl Engine {
         }
     }
 
-    // Add methods to modify window properties
-    pub fn set_title(&self, window: &Window, title: &str) {
-        window.set_title(title);
-    }
-
     // Add getter for window ID
     pub fn window_id(&self) -> winit::window::WindowId {
         self.window_id
-    }
-
-    // Add getter for window size
-    pub fn inner_size(&self, window: &Window) -> winit::dpi::PhysicalSize<u32> {
-        window.inner_size()
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {

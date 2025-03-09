@@ -13,6 +13,8 @@ log = "0.4"
 pollster = "0.3"
 bytemuck = { version = "1.14", features = ["derive"] }
 anyhow = "1.0"
+raw-window-handle = "0.5"
+
 
 # Math and utility libraries
 glam = { version = "0.24", features = ["serde"] }
